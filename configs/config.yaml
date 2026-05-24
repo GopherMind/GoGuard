@@ -1,0 +1,8 @@
+proxy:
+  targets:
+    - host: localhost:8080
+      target: http://localhost:5173
+    - host: sync-work
+      target: http://localhost:5173
+    - host: test.site
+      target: http://localhost:4000

@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Protected Page - GoGuard Demo</title>
+
+    <!-- Подключаем GoGuard SDK -->
+    <script src="/goguard/sdk/goguard-sdk.js"></script>
+
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 40px 20px;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            padding: 40px;
+        }
+
+        h1 {
+            color: #2d3748;
+            margin-bottom: 16px;
+        }
+
+        .badge {
+            display: inline-block;
+            background: #48bb78;
+            color: white;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 24px;
+        }
+
+        p {
+            color: #4a5568;
+            line-height: 1.6;
+            margin-bottom: 16px;
+        }
+
+        .info-box {
+            background: #f7fafc;
+            border-left: 4px solid #667eea;
+            padding: 20px;
+            margin: 24px 0;
+            border-radius: 4px;
+        }
+
+        .info-box h3 {
+            color: #2d3748;
+            margin-bottom: 12px;
+        }
+
+        .info-box ul {
+            list-style: none;
+            padding-left: 0;
+        }
+
+        .info-box li {
+            color: #4a5568;
+            padding: 8px 0;
+            border-bottom: 1px solid #e2e8f0;
+        }
+
+        .info-box li:last-child {
+            border-bottom: none;
+        }
+
+        .info-box li strong {
+            color: #2d3748;
+            display: inline-block;
+            width: 200px;
+        }
+
+        button {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+
+        button:hover {
+            background: #5a67d8;
+        }
+
+        .demo-section {
+            margin-top: 32px;
+            padding-top: 32px;
+            border-top: 2px solid #e2e8f0;
+        }
+
+        #response {
+            background: #f7fafc;
+            padding: 16px;
+            border-radius: 8px;
+            margin-top: 16px;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            white-space: pre-wrap;
+            display: none;
+        }
+
+        .footer {
+            text-align: center;
+            margin-top: 40px;
+            color: #a0aec0;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <span class="badge">🛡️ Protected by GoGuard</span>
+        <h1>Welcome to Protected Page</h1>
+        <p>
+            This page is protected by GoGuard security system. The SDK is automatically collecting
+            behavioral data to distinguish humans from bots.
+        </p>
+
+        <div class="info-box">
+            <h3>What GoGuard SDK Does:</h3>
+            <ul>
+                <li><strong>✓ Detects automation:</strong> Puppeteer, Selenium, WebDriver</li>
+                <li><strong>✓ Tracks behavior:</strong> Mouse movements, clicks, keystrokes</li>
+                <li><strong>✓ Browser fingerprinting:</strong> Canvas, WebGL, system info</li>
+                <li><strong>✓ Automatic protection:</strong> All requests include security headers</li>
+            </ul>
+        </div>
+
+        <div class="demo-section">
+            <h3>Test API Request</h3>
+            <p>Click the button below to make an API request. The SDK will automatically add security headers.</p>
+            <button onclick="testRequest()">Make API Request</button>
+            <div id="response"></div>
+        </div>
+
+        <div class="footer">
+            Protected by <strong>GoGuard</strong> | Open Source Security Solution
+        </div>
+    </div>
+
+    <script>
+        // Демонстрация работы SDK
+        async function testRequest() {
+            const responseEl = document.getElementById('response');
+            responseEl.style.display = 'block';
+            responseEl.textContent = 'Loading...';
+
+            try {
+                // SDK автоматически добавит X-GoGuard-FP и X-GoGuard-Score headers
+                const response = await fetch('/api/test', {
+                    method: 'GET',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+
+                const data = await response.json();
+
+                responseEl.textContent = JSON.stringify({
+                    status: response.status,
+                    data: data,
+                    headers_sent: {
+                        'X-GoGuard-FP': window.goguard?.fingerprint?.substring(0, 16) + '...',
+                        'X-GoGuard-Score': window.goguard?.behaviorScore
+                    }
+                }, null, 2);
+            } catch (error) {
+                responseEl.textContent = 'Error: ' + error.message;
+            }
+        }
+
+        // Показываем информацию о SDK после инициализации
+        setTimeout(() => {
+            if (window.goguard) {
+                console.log('GoGuard SDK initialized');
+                console.log('Fingerprint:', window.goguard.fingerprint);
+                console.log('Behavior Score:', window.goguard.behaviorScore);
+                console.log('Mouse movements:', window.goguard.mouseMovements.length);
+                console.log('Clicks:', window.goguard.clicks.length);
+            }
+        }, 3000);
+    </script>
+</body>
+</html>

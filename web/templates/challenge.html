@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Security Check - GoGuard</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            max-width: 500px;
+            width: 100%;
+            padding: 40px;
+            text-align: center;
+        }
+
+        .icon {
+            font-size: 64px;
+            margin-bottom: 20px;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+
+            0%,
+            100% {
+                transform: scale(1);
+            }
+
+            50% {
+                transform: scale(1.1);
+            }
+        }
+
+        h1 {
+            color: #2d3748;
+            font-size: 28px;
+            margin-bottom: 16px;
+        }
+
+        p {
+            color: #4a5568;
+            font-size: 16px;
+            line-height: 1.6;
+            margin-bottom: 24px;
+        }
+
+        .spinner {
+            border: 4px solid #e2e8f0;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 24px;
+        }
+
+        @keyframes spin {
+            0% {
+                transform: rotate(0deg);
+            }
+
+            100% {
+                transform: rotate(360deg);
+            }
+        }
+
+        .status {
+            color: #718096;
+            font-size: 14px;
+            margin-top: 16px;
+        }
+
+        .footer {
+            margin-top: 32px;
+            font-size: 14px;
+            color: #a0aec0;
+        }
+
+        .success {
+            display: none;
+            color: #38a169;
+            font-size: 18px;
+            font-weight: 600;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <div class="icon">🔒</div>
+        <h1>Security Check</h1>
+        <p>Please wait while we verify your browser...</p>
+
+        <div class="spinner"></div>
+
+        <div class="status" id="status">Analyzing your connection...</div>
+        <div class="success" id="success">✓ Verification complete! Redirecting...</div>
+
+        <div class="footer">
+            Protected by <strong>GoGuard</strong>
+        </div>
+    </div>
+
+    <script>
+        console.log('Starting challenge script');
+        // JavaScript Challenge
+       (async function () {
+    const statusEl = document.getElementById('status');
+    const successEl = document.getElementById('success');
+    const spinnerEl = document.querySelector('.spinner');
+
+    function showError(message) {
+        spinnerEl.style.display = 'none';
+        statusEl.style.color = '#e53e3e';
+        statusEl.innerHTML = `
+            ${message}<br><br>
+            <button onclick="location.reload()" style="
+                padding: 8px 20px;
+                background: #667eea;
+                color: white;
+                border: none;
+                border-radius: 8px;
+                cursor: pointer;
+                font-size: 14px;
+            ">Try again</button>
+        `;
+    }
+
+    try {
+        statusEl.textContent = 'Checking browser capabilities...';
+        await sleep(500);
+
+        statusEl.textContent = 'Solving challenge...';
+        const challenge = await Promise.race([
+            solveChallenge(),
+            sleep(10000).then(() => { throw new Error('Challenge timeout') })
+        ]);
+
+        if (!challenge) throw new Error('Challenge failed');
+        await sleep(500);
+
+        statusEl.textContent = 'Collecting fingerprint...';
+        const fingerprint = await collectFingerprint();
+        await sleep(300);
+
+        statusEl.textContent = 'Verifying...';
+        const result = await verifyChallenge(challenge, fingerprint);
+
+        if (result.success) {
+            statusEl.style.display = 'none';
+            successEl.style.display = 'block';
+            setTimeout(() => {
+                const urlParams = new URLSearchParams(window.location.search);
+                const returnUrl = urlParams.get('return');
+                if (returnUrl) {
+                    window.location.href = decodeURIComponent(returnUrl);
+                } else {
+                    window.location.reload();
+                }
+            }, 1000);
+        } else {
+            showError('Verification failed: ' + (result.error || 'Unknown error'));
+        }
+
+    } catch (e) {
+        showError('Connection error: ' + e.message);
+    }
+})();
+
+        function sleep(ms) {
+            return new Promise(resolve => setTimeout(resolve, ms));
+        }
+
+        async function solveChallenge() {
+            // Простой proof-of-work: найти число, hash которого начинается с '00'
+            const target = '{{.Challenge}}';
+             // Сервер передает challenge
+            let nonce = 0;
+
+            while (true) {
+                const data = target + nonce;
+                const hash = await sha256(data);
+
+                if (hash.startsWith('00')) {
+                    return { target, nonce, hash };
+                }
+
+                nonce++;
+
+                // Ограничение для защиты от зависания
+                if (nonce > 100000) break;
+            }
+
+            return null;
+        }
+
+        async function sha256(message) {
+            const msgBuffer = new TextEncoder().encode(message);
+            const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
+            const hashArray = Array.from(new Uint8Array(hashBuffer));
+            return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+        }
+
+        async function collectFingerprint() {
+            return {
+                screen: {
+                    width: screen.width,
+                    height: screen.height,
+                    colorDepth: screen.colorDepth
+                },
+                timezone: new Date().getTimezoneOffset(),
+                languages: navigator.languages,
+                platform: navigator.platform,
+                hardwareConcurrency: navigator.hardwareConcurrency
+            };
+        }
+
+       async function verifyChallenge(challenge, fingerprint) {
+    try {
+        // AbortController — убивает запрос через 5 секунд
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+        const response = await fetch('/goguard/verify', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            signal: controller.signal,
+            body: JSON.stringify({
+                challenge: challenge,
+                fingerprint: fingerprint,
+                token: '{{.Token}}'
+            })
+        });
+
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+            return { success: false, error: `HTTP ${response.status}` };
+        }
+
+        return await response.json();
+
+    } catch (e) {
+        if (e.name === 'AbortError') {
+            return { success: false, error: 'timeout' };
+        }
+        return { success: false, error: e.message };
+    }
+}
+    </script>
+</body>
+
+</html>
