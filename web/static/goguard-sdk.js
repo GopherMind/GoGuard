@@ -317,8 +317,11 @@ class GoGuardSDK {
 
             try {
                 const response = await originalFetch(url, options);
-                
-                if (response.status === 403) {
+
+                // Challenge can come back as 401 (verification required) or
+                // 403 (legacy). The X-GoGuard-Challenge header is the source
+                // of truth — the status code only mirrors it.
+                if (response.status === 401 || response.status === 403) {
                     const isChallenge = response.headers.get('X-GoGuard-Challenge') === 'true';
                     if (isChallenge) {
                         console.log('[GoGuard] AJAX Challenge detected. Redirecting...');
@@ -350,7 +353,7 @@ class GoGuardSDK {
 
             const xhr = this;
             this.addEventListener('load', function () {
-                if (xhr.status === 403) {
+                if (xhr.status === 401 || xhr.status === 403) {
                     const isChallenge = xhr.getResponseHeader('X-GoGuard-Challenge') === 'true';
                     if (isChallenge) {
                         console.log('[GoGuard] XHR Challenge detected. Redirecting...');

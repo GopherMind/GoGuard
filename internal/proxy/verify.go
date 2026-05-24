@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strings"
 )
 
 type VerifyRequest struct {
@@ -33,12 +34,16 @@ func VerifyHandler(w http.ResponseWriter, r *http.Request) {
 	// Устанавливаем куку "клиренса", которая говорит прокси, что этот клиент проверен
 	clearanceValue := utils.SignCookie(ip)
 	
+	secure := r.TLS != nil
+	if !secure && strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
+		secure = true
+	}
 	http.SetCookie(w, &http.Cookie{
 		Name:     "X-GoGuard-Clearance",
 		Value:    clearanceValue,
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   r.TLS != nil,
+		Secure:   secure,
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   3600, // 1 час
 	})
