@@ -1,8 +1,29 @@
 proxy:
   targets:
+    # Map each PUBLIC host the user types in the browser to the internal
+    # backend. The user never sees the `target` URL: the proxy rewrites
+    # redirects and cookies so the address bar stays on `host`.
+    #
+    # `preserve_host: true` (default) keeps the original Host header so the
+    # backend builds links against the public domain. Set it to false only if
+    # the backend uses Host-based vhost routing and needs the upstream host.
+    #
+    # Add your production domain here, e.g. `mysite.com`.
+
     - host: localhost:8080
       target: http://localhost:5173
+      preserve_host: true
+
     - host: sync-work
       target: http://localhost:5173
+      preserve_host: true
+
     - host: test.site
       target: http://localhost:4000
+      preserve_host: true
+
+    # Wildcard catch-all (optional). Uncomment to route any unknown host to
+    # a default backend instead of returning 404.
+    # - host: "*"
+    #   target: http://localhost:5173
+    #   preserve_host: true

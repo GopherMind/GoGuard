@@ -35,59 +35,51 @@ func handleInternal(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// resolveDomain selects the backend mapping for a request. The X-GoGuard-SiteKey
+// header takes precedence (the SDK injects it on subsequent requests) and we
+// fall back to the public Host header. Matching is case-insensitive and
+// tolerant of a missing port.
+func resolveDomain(r *http.Request) *Domain {
+	if k := r.Header.Get("X-GoGuard-SiteKey"); k != "" {
+		if d, ok := LookupDomain(k); ok {
+			return d
+		}
+	}
+	if d, ok := LookupDomain(r.Host); ok {
+		return d
+	}
+	return nil
+}
+
 func handler(w http.ResponseWriter, r *http.Request) {
 	ip := utils.GetIp(r)
 	log.Printf("[Request] %s %s | IP: %s | Host: %s", r.Method, r.URL.Path, ip, r.Host)
 
-	// 1. Проверка клиренса (Cloudflare-like) - САМЫЙ ПЕРВЫЙ ШАГ
-	cookie, err := r.Cookie("X-GoGuard-Clearance")
-	if err == nil {
-		val, isValid := utils.VerifyCookie(cookie.Value)
-		if isValid && val == ip {
-			siteKey := r.Header.Get("X-GoGuard-SiteKey")
-			if siteKey == "" {
-				siteKey = r.Host
-			}
-
-			domain, exists := Domains[siteKey]
-			if exists {
-				if strings.HasPrefix(r.URL.Path, "/goguard/") {
-					handleInternal(w, r)
-					return
-				}
-				iw := newInjectWriter(w, siteKey)
-				domain.Proxy.ServeHTTP(iw, r)
-				iw.flush()
-				return
-			}
-		}
-	}
-
-	// Исключаем внутренние маршруты GoGuard из проверки рисков
+	// Internal GoGuard routes are served regardless of clearance/domain so the
+	// challenge page, SDK, verification endpoint, etc. always work.
 	if strings.HasPrefix(r.URL.Path, "/goguard/") {
 		handleInternal(w, r)
 		return
 	}
 
-	siteKey := r.Header.Get("X-GoGuard-SiteKey")
-	if siteKey == "" {
-		host := r.Host
-		if _, exists := Domains[host]; exists {
-			siteKey = host
-		} else {
-			log.Printf("[Reject] No SiteKey and Host %s not in Domains", r.Host)
-			http.Error(w, "Forbidden", http.StatusForbidden)
+	domain := resolveDomain(r)
+	if domain == nil {
+		log.Printf("[Reject] No domain mapping for Host=%q SiteKey=%q (path=%s)",
+			r.Host, r.Header.Get("X-GoGuard-SiteKey"), r.URL.Path)
+		http.Error(w, "Site not configured", http.StatusNotFound)
+		return
+	}
+
+	// 1. Clearance cookie — equivalent of Cloudflare's cf_clearance. If valid
+	//    for this IP, proxy straight through without re-running risk checks.
+	if cookie, err := r.Cookie("X-GoGuard-Clearance"); err == nil {
+		if val, ok := utils.VerifyCookie(cookie.Value); ok && val == ip {
+			proxyThrough(w, r, domain)
 			return
 		}
 	}
 
-	domain, exists := Domains[siteKey]
-	if !exists {
-		http.Error(w, "Site not found", http.StatusNotFound)
-		return
-	}
-
-	// 2. Проверка черного списка IP
+	// 2. IP block list.
 	if utils.IsBlocked(r.Host, ip) {
 		log.Printf("[Blocked IP] %s | IP: %s", r.URL.Path, ip)
 		if isAjaxRequest(r) {
@@ -98,7 +90,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 3. Сбор метрик и расчет риска
+	// 3. Compute risk.
 	rateCount, _, _ := utils.TrackUser(r)
 	serverRisk := utils.CheckHeaders(r, rateCount)
 	clientRisk := utils.CheckClientFingerprint(r)
@@ -107,7 +99,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[Risk Check] %s | IP: %s | Risk: %d (S:%d, C:%d) | Rate: %d",
 		r.URL.Path, ip, risk, serverRisk, clientRisk, rateCount)
 
-	// 4. Реакция на риск
+	// 4. React to risk.
 	if risk >= 60 {
 		utils.BlockIP(r.Host, ip, "Critical risk", 24*time.Hour)
 		if isAjaxRequest(r) {
@@ -121,28 +113,51 @@ func handler(w http.ResponseWriter, r *http.Request) {
 			sendChallengeJSON(w, "Verification required")
 			return
 		}
+		// Serve the challenge inline so the browser stays on the same URL —
+		// the page reloads on success.
 		pages.ServeChallengePage(w, r)
 		return
 	}
 
-	// 5. Если все ок — устанавливаем сессию и проксируем
-	rawSessionId := uuid.New().String()
-	signedValue := utils.SignCookie(rawSessionId)
+	// 5. Issue a session cookie and forward the request transparently.
+	rawSessionID := uuid.New().String()
+	signedValue := utils.SignCookie(rawSessionID)
 	http.SetCookie(w, &http.Cookie{
 		Name:     "X-GoGuard-SessionId",
 		Value:    signedValue,
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   r.TLS != nil,
-		SameSite: http.SameSiteStrictMode,
+		Secure:   isRequestSecure(r),
+		// Lax keeps the cookie attached on top-level navigations from other
+		// sites (e.g. clicking a link to the protected site).
+		SameSite: http.SameSiteLaxMode,
 	})
 
-	iw := newInjectWriter(w, siteKey)
+	proxyThrough(w, r, domain)
+}
+
+// proxyThrough wraps the response writer with the script injector and calls
+// the backend reverse proxy.
+func proxyThrough(w http.ResponseWriter, r *http.Request, domain *Domain) {
+	iw := newInjectWriter(w, domain.Host)
 	domain.Proxy.ServeHTTP(iw, r)
 	iw.flush()
 }
 
-// isAjaxRequest определяет fetch/XHR запросы
+// isRequestSecure returns true if the request reached us over TLS, either
+// directly or via a TLS-terminating proxy in front of GoGuard.
+func isRequestSecure(r *http.Request) bool {
+	if r.TLS != nil {
+		return true
+	}
+	if proto := r.Header.Get("X-Forwarded-Proto"); strings.EqualFold(proto, "https") {
+		return true
+	}
+	return false
+}
+
+// isAjaxRequest identifies fetch/XHR/websocket-like requests that should not
+// receive an HTML challenge page.
 func isAjaxRequest(r *http.Request) bool {
 	fetchDest := r.Header.Get("Sec-Fetch-Dest")
 	fetchMode := r.Header.Get("Sec-Fetch-Mode")
@@ -151,6 +166,9 @@ func isAjaxRequest(r *http.Request) bool {
 
 	if fetchDest == "document" {
 		return false
+	}
+	if strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+		return true
 	}
 	if requestedWith == "XMLHttpRequest" {
 		return true
@@ -177,7 +195,9 @@ func sendBlockedJSON(w http.ResponseWriter, reason string) {
 func sendChallengeJSON(w http.ResponseWriter, reason string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("X-GoGuard-Challenge", "true")
-	w.WriteHeader(http.StatusForbidden)
+	// 401 makes more sense here than 403 — the client can retry after the
+	// challenge succeeds and a clearance cookie is issued.
+	w.WriteHeader(http.StatusUnauthorized)
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"challenge": true,
 		"action":    "challenge",
