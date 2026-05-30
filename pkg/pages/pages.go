@@ -7,9 +7,10 @@ import (
 	"log"
 	"net/http"
 	"time"
+
+	"GoGuard/internal/database"
 )
 
-// BlockedPageData содержит данные для страницы блокировки
 type BlockedPageData struct {
 	Reason       string
 	IP           string
@@ -18,14 +19,11 @@ type BlockedPageData struct {
 	IncidentID   string
 }
 
-// ChallengePageData содержит данные для страницы challenge
 type ChallengePageData struct {
 	Challenge string
 	Token     string
 }
 
-// SendBlockedPage отправляет страницу блокировки
-// ServeChallengePage — handler для маршрута /goguard/challenge
 func ServeChallengePage(w http.ResponseWriter, r *http.Request) {
 	tmpl, err := template.ParseFiles("web/templates/challenge.html")
 	if err != nil {
@@ -34,19 +32,28 @@ func ServeChallengePage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	challenge := generateChallenge()
+	token := generateToken()
+
+	err = database.Set("goguard:challenge:"+token, challenge, 5*time.Minute)
+	if err != nil {
+		log.Printf("❌ Failed to store challenge in Redis: %v", err)
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+
 	data := ChallengePageData{
-		Challenge: generateChallenge(),
-		Token:     generateToken(),
+		Challenge: challenge,
+		Token:     token,
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(http.StatusForbidden)
+	w.WriteHeader(http.StatusOK)
 	if err := tmpl.Execute(w, data); err != nil {
 		log.Printf("❌ Execute error: %v", err)
 	}
 }
 
-// ServeBlockedPage — handler для маршрута /goguard/blocked
 func ServeBlockedPage(w http.ResponseWriter, r *http.Request) {
 	tmpl, err := template.ParseFiles("web/templates/blocked.html")
 	if err != nil {
@@ -74,21 +81,18 @@ func isAjaxRequest(r *http.Request) bool {
 		r.Header.Get("Sec-Fetch-Mode") == "same-origin" && r.Header.Get("Sec-Fetch-Dest") == "empty"
 }
 
-// generateIncidentID генерирует уникальный ID инцидента
 func generateIncidentID() string {
 	bytes := make([]byte, 8)
 	rand.Read(bytes)
 	return hex.EncodeToString(bytes)
 }
 
-// generateChallenge генерирует случайную строку для challenge
 func generateChallenge() string {
 	bytes := make([]byte, 16)
 	rand.Read(bytes)
 	return hex.EncodeToString(bytes)
 }
 
-// generateToken генерирует токен для верификации
 func generateToken() string {
 	bytes := make([]byte, 32)
 	rand.Read(bytes)

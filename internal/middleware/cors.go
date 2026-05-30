@@ -3,28 +3,43 @@ package middleware
 import (
 	"log"
 	"net/http"
+	"net/url"
 )
 
-// CorsMiddleware sets permissive CORS headers that always reflect the
-// incoming Origin (when present) rather than hard-coding a backend URL —
-// hard-coding leaks the internal address into the browser and breaks
-// credentialed requests served from the real public domain.
+var IsAllowedOriginFunc func(origin string) bool
+
+func isSameOrigin(origin, host string) bool {
+	u, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	return u.Host == host
+}
+
 func CorsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
 		if origin != "" {
-			log.Printf("[CORS] %s %s from Origin=%s", r.Method, r.URL.Path, origin)
-			w.Header().Set("Access-Control-Allow-Origin", origin)
-			w.Header().Add("Vary", "Origin")
-			w.Header().Set("Access-Control-Allow-Credentials", "true")
+			allowed := false
+			if IsAllowedOriginFunc != nil {
+				allowed = IsAllowedOriginFunc(origin)
+			} else {
+				allowed = isSameOrigin(origin, r.Host)
+			}
+
+			if allowed {
+				w.Header().Set("Access-Control-Allow-Origin", origin)
+				w.Header().Add("Vary", "Origin")
+				w.Header().Set("Access-Control-Allow-Credentials", "true")
+			} else {
+				log.Printf("[CORS Blocked] Unauthorized Origin: %s for request to %s", origin, r.Host)
+			}
 		}
 
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 
 		reqHeaders := r.Header.Get("Access-Control-Request-Headers")
 		if reqHeaders != "" {
-			// Echo whatever the preflight asked for so the proxy doesn't
-			// silently drop application headers (CSRF tokens, auth, etc.).
 			w.Header().Set("Access-Control-Allow-Headers", reqHeaders)
 			w.Header().Add("Vary", "Access-Control-Request-Headers")
 		} else {

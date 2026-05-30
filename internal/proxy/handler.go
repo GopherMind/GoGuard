@@ -1,4 +1,3 @@
-// internal/collect/handler.go
 package proxy
 
 import (

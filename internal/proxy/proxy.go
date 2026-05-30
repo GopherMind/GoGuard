@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -35,10 +36,6 @@ func handleInternal(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// resolveDomain selects the backend mapping for a request. The X-GoGuard-SiteKey
-// header takes precedence (the SDK injects it on subsequent requests) and we
-// fall back to the public Host header. Matching is case-insensitive and
-// tolerant of a missing port.
 func resolveDomain(r *http.Request) *Domain {
 	if k := r.Header.Get("X-GoGuard-SiteKey"); k != "" {
 		if d, ok := LookupDomain(k); ok {
@@ -55,8 +52,6 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	ip := utils.GetIp(r)
 	log.Printf("[Request] %s %s | IP: %s | Host: %s", r.Method, r.URL.Path, ip, r.Host)
 
-	// Internal GoGuard routes are served regardless of clearance/domain so the
-	// challenge page, SDK, verification endpoint, etc. always work.
 	if strings.HasPrefix(r.URL.Path, "/goguard/") {
 		handleInternal(w, r)
 		return
@@ -70,16 +65,19 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 1. Clearance cookie — equivalent of Cloudflare's cf_clearance. If valid
-	//    for this IP, proxy straight through without re-running risk checks.
+	if r.URL.Path == "/favicon.ico" || r.URL.Path == "/robots.txt" {
+		proxyThrough(w, r, domain)
+		return
+	}
+
 	if cookie, err := r.Cookie("X-GoGuard-Clearance"); err == nil {
-		if val, ok := utils.VerifyCookie(cookie.Value); ok && val == ip {
+		if _, ok := utils.VerifyCookie(cookie.Value); ok {
 			proxyThrough(w, r, domain)
 			return
 		}
+		log.Printf("[Clearance] Invalid or tampered cookie from %s", ip)
 	}
 
-	// 2. IP block list.
 	if utils.IsBlocked(r.Host, ip) {
 		log.Printf("[Blocked IP] %s | IP: %s", r.URL.Path, ip)
 		if isAjaxRequest(r) {
@@ -90,17 +88,16 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 3. Compute risk.
 	rateCount, _, _ := utils.TrackUser(r)
 	serverRisk := utils.CheckHeaders(r, rateCount)
 	clientRisk := utils.CheckClientFingerprint(r)
 	risk := serverRisk + clientRisk
 
-	log.Printf("[Risk Check] %s | IP: %s | Risk: %d (S:%d, C:%d) | Rate: %d",
-		r.URL.Path, ip, risk, serverRisk, clientRisk, rateCount)
+	log.Printf("[Risk Check] %s | IP: %s | Risk: %d (S:%d, C:%d) | Rate: %d | UA: %q",
+		r.URL.Path, ip, risk, serverRisk, clientRisk, rateCount, r.UserAgent())
 
-	// 4. React to risk.
 	if risk >= 60 {
+		log.Printf("[Blocking] IP %s blocked for path %s. Reason: High risk (%d)", ip, r.URL.Path, risk)
 		utils.BlockIP(r.Host, ip, "Critical risk", 24*time.Hour)
 		if isAjaxRequest(r) {
 			sendBlockedJSON(w, "High risk")
@@ -109,17 +106,22 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		pages.ServeBlockedPage(w, r)
 		return
 	} else if risk >= 30 {
+		if strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+			log.Printf("[Warning] WebSocket from %s challenged but passed through to avoid breaking handshake", ip)
+			proxyThrough(w, r, domain)
+			return
+		}
+
 		if isAjaxRequest(r) {
+			log.Printf("[Challenge] Sending JSON challenge for AJAX request: %s", r.URL.Path)
 			sendChallengeJSON(w, "Verification required")
 			return
 		}
-		// Serve the challenge inline so the browser stays on the same URL —
-		// the page reloads on success.
+		log.Printf("[Challenge] Serving inline challenge page for: %s", r.URL.Path)
 		pages.ServeChallengePage(w, r)
 		return
 	}
 
-	// 5. Issue a session cookie and forward the request transparently.
 	rawSessionID := uuid.New().String()
 	signedValue := utils.SignCookie(rawSessionID)
 	http.SetCookie(w, &http.Cookie{
@@ -128,24 +130,22 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		Path:     "/",
 		HttpOnly: true,
 		Secure:   isRequestSecure(r),
-		// Lax keeps the cookie attached on top-level navigations from other
-		// sites (e.g. clicking a link to the protected site).
 		SameSite: http.SameSiteLaxMode,
 	})
 
 	proxyThrough(w, r, domain)
 }
 
-// proxyThrough wraps the response writer with the script injector and calls
-// the backend reverse proxy.
 func proxyThrough(w http.ResponseWriter, r *http.Request, domain *Domain) {
+	publicHost := r.Header.Get("X-Forwarded-Host")
+	if publicHost == "" {
+		publicHost = r.Host
+	}
 	iw := newInjectWriter(w, domain.Host)
 	domain.Proxy.ServeHTTP(iw, r)
 	iw.flush()
 }
 
-// isRequestSecure returns true if the request reached us over TLS, either
-// directly or via a TLS-terminating proxy in front of GoGuard.
 func isRequestSecure(r *http.Request) bool {
 	if r.TLS != nil {
 		return true
@@ -156,8 +156,6 @@ func isRequestSecure(r *http.Request) bool {
 	return false
 }
 
-// isAjaxRequest identifies fetch/XHR/websocket-like requests that should not
-// receive an HTML challenge page.
 func isAjaxRequest(r *http.Request) bool {
 	fetchDest := r.Header.Get("Sec-Fetch-Dest")
 	fetchMode := r.Header.Get("Sec-Fetch-Mode")
@@ -195,8 +193,6 @@ func sendBlockedJSON(w http.ResponseWriter, reason string) {
 func sendChallengeJSON(w http.ResponseWriter, reason string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("X-GoGuard-Challenge", "true")
-	// 401 makes more sense here than 403 — the client can retry after the
-	// challenge succeeds and a clearance cookie is issued.
 	w.WriteHeader(http.StatusUnauthorized)
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"challenge": true,
@@ -207,6 +203,15 @@ func sendChallengeJSON(w http.ResponseWriter, reason string) {
 
 func StartProxy() {
 	InitDomains()
+
+	middleware.IsAllowedOriginFunc = func(origin string) bool {
+		u, err := url.Parse(origin)
+		if err != nil {
+			return false
+		}
+		return LookupOrigin(u.Host)
+	}
+
 	http.Handle("/", middleware.CorsMiddleware(http.HandlerFunc(handler)))
 
 	port := os.Getenv("PORT")

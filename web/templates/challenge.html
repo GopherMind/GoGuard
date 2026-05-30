@@ -230,7 +230,8 @@
                 timezone: new Date().getTimezoneOffset(),
                 languages: navigator.languages,
                 platform: navigator.platform,
-                hardwareConcurrency: navigator.hardwareConcurrency
+                hardwareConcurrency: navigator.hardwareConcurrency,
+                webdriver: navigator.webdriver || false
             };
         }
 

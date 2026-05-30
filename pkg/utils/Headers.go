@@ -7,19 +7,18 @@ import (
 )
 
 const (
-	RiskNoUserAgent     = 30
+	RiskNoUserAgent     = 25
 	RiskNoIP            = 40
 	RiskHighRequestRate = 35
 
-	RiskNoAcceptLanguage       = 15
-	RiskNoAcceptLanguageSimple = 10
-	RiskNoAcceptEncoding       = 15
+	RiskNoAcceptLanguage       = 5
+	RiskNoAcceptLanguageSimple = 2
+	RiskNoAcceptEncoding       = 5
 
-	RiskNoSecFetchSite = 5
+	RiskNoSecFetchSite = 2
 )
 
 func CheckHeaders(r *http.Request, rateCount int64) int {
-
 	risk := 0
 	ua := r.Header.Get("User-Agent")
 	isSafari := strings.Contains(ua, "Safari") && !strings.Contains(ua, "Chrome")
@@ -60,7 +59,6 @@ func CheckHeaders(r *http.Request, rateCount int64) int {
 	if r.TLS != nil && r.TLS.Version < tls.VersionTLS12 {
 		risk += 20
 	}
-	// rateCount, _, err := TrackUser(r)
 	if rateCount > 40 {
 		risk += RiskHighRequestRate
 	}

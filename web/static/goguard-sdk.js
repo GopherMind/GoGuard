@@ -287,16 +287,11 @@ class GoGuardSDK {
     // Вызывается при подозрении со стороны сервера
     triggerChallenge() {
         clearInterval(this.collectInterval);
+
+        // Always stay on the current origin — the proxy serves /goguard/challenge
+        // transparently, so no cross-origin URL is ever needed.
         const returnUrl = encodeURIComponent(window.location.href);
-        console.log('[GoGuard] redirecting to challenge page, returnUrl:', returnUrl);
-        
-        let challengeUrl = '/goguard/challenge';
-        if (!this.isProxyMode && this.proxyOrigin) {
-            challengeUrl = `${this.proxyOrigin}/goguard/challenge`;
-            console.log('[GoGuard] Using absolute challenge URL (cross-origin):', challengeUrl);
-        }
-        
-        window.location.href = `${challengeUrl}?return=${returnUrl}`;
+        window.location.href = `/goguard/challenge?return=${returnUrl}`;
     }
 
     interceptRequests() {

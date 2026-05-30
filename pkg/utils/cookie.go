@@ -13,7 +13,6 @@ var secretKeySession string
 
 func init() {
 	secretKeySession = os.Getenv("SECRET_KEY_SESSION")
-	log.Printf("Loaded secretKeySession: %s", secretKeySession)
 	if secretKeySession == "" {
 		log.Fatal("secretKeySession environment variable is not set")
 	}
@@ -24,33 +23,27 @@ func init() {
 
 func SignCookie(value string) string {
 	h := hmac.New(sha256.New, []byte(secretKeySession))
-
 	h.Write([]byte(value))
-
-	signature := hex.EncodeToString(h.Sum(nil))
-
-	return value + "." + signature
+	return value + "." + hex.EncodeToString(h.Sum(nil))
 }
 
-func VerifyCookie(CookieValue string) (string, bool) {
-	part := strings.Split(CookieValue, ".")
-
-	if len(part) != 2 {
-		log.Printf("[VerifyCookie] Invalid cookie format (parts: %d)", len(part))
+func VerifyCookie(cookieValue string) (string, bool) {
+	idx := strings.LastIndex(cookieValue, ".")
+	if idx < 0 {
+		log.Printf("[VerifyCookie] No separator found")
 		return "", false
 	}
 
-	value := part[0]
-	signature := part[1]
+	value := cookieValue[:idx]
+	got := cookieValue[idx+1:]
 
 	h := hmac.New(sha256.New, []byte(secretKeySession))
 	h.Write([]byte(value))
-	expectedSignature := hex.EncodeToString(h.Sum(nil))
+	want := hex.EncodeToString(h.Sum(nil))
 
-	if !hmac.Equal([]byte(signature), []byte(expectedSignature)) {
-		log.Printf("[VerifyCookie] Signature mismatch! Value: '%s', Expected: '%s', Got: '%s'", value, expectedSignature, signature)
+	if !hmac.Equal([]byte(got), []byte(want)) {
+		log.Printf("[VerifyCookie] Signature mismatch for value=%q", value)
 		return "", false
 	}
-
 	return value, true
 }

@@ -15,7 +15,7 @@ proxy:
       preserve_host: true
 
     - host: sync-work
-      target: http://localhost:5173
+      target: http://localhost:3000
       preserve_host: true
 
     - host: test.site
